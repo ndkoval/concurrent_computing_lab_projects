@@ -1,36 +1,25 @@
-# summer_practice_jb
+# Adopting GenMC Model Checker to Lincheck (industrial)
+Concurrent programming is notoriously complex and error-prone. Programming bugs can arise from various sources, such as operation re-reordering or an incomplete understanding of the memory model. With weaker-memory consistency architectures, such as ARM on the rise due to Apple efforts, ensuring that your concurrent algorithms are correct is as important as ever.
 
-## NUMA-Aware Scheduler in Kotlin Coroutines
+Some time ago, we presented Lincheck — a new practical tool for testing concurrent algorithms in JVM-based languages, such as Java, Kotlin, or Scala, that supports both stress testing and bounded model checking modes ([GitHub](https://github.com/Kotlin/kotlinx-lincheck)). With such a tool, developing new algorithms becomes simpler and significantly more efficient. Please, read [this blog post](https://blog.jetbrains.com/kotlin/2021/02/how-we-test-concurrent-primitives-in-kotlin-coroutines) before going to the rest of the project description.
 
-The current coroutines scheduler (aka dispatcher) maintains per-thread queues and performs stealing when the local queue becomes empty. However, the choice of the queue for stealing does not depend on the NUMA architecture. This way, it is possible to access a queue from another NUMA node, which is expensive comparing to stealing from the same-node queue.
+Since the main implementation language of Lincheck is Kotlin, which is multi-platform with interoperability with native languages like Swift or C/C++, one of our current main focuses is making it possible to write Lincheck tests for implementations in these languages. Currently, we have successfully supported the stress testing mode in Kotlin/Native, which automatically makes it possible to use Lincheck in C/C++.
 
-In short, you will make the scheduler NUMA-friendly by preferring stealing from the same node queues. The project is technically untrivial since it requires using NUMA-related API, which is inaccessible in JVM by default. Thus, you will need to use JNI (Java Native Interface) to access this API. In addition, you will contribute a set of macro benchmarks to evaluate the performance boost.
+With a possibility to write tests in C/C++, it becomes intriguing to adopt the existing state-of-the-art model checkers to Lincheck. As mentioned in the beginning, it is vital to support weak memory models. Therefore, we consider two main model checkers: Nidhugg ([GitHub](https://github.com/nidhugg/nidhugg)) and GenMC ([website](https://plv.mpi-sws.org/genmc/), [GitHub](https://github.com/mpi-sws/genmc/)), both work on the level of LLVM bitcode.
 
-## Multi-Word CAS Optimization and Evaluation
-
-The state-of-the-art k-CAS algorithm by Harris et al. [1] uses a special descriptor for the k-CAS operation itself and a special restricted double-compare single-swap (RDCSS) operation to replace the expected value with the k-CAS descriptor atomically if the k-CAS operation is not completed yet. The standard way to implement this RDCSS operation is by using special descriptors so that it requires two additional CAS-s to set this descriptor and make a consensus on its outcome. Recently, there was presented an algorithm that achieves this atomicity ``for free'', without RDCSS, by tricky descriptors reclamation [2]. However, this solution requires a custom epoch-based memory reclamation.
-
-We suggest an optimization that makes the algorithm obstruction-free but uses only one descriptor and does not require specific memory reclamation; it should work great as a fast path for the classic algorithm. We also believe that it is possible to create more optimization and improve the multi-word CAS performance.
-
-In sum, you will implement all existing k-CAS algorithms in C++ (and probably Kotlin), write multiple benchmarks, and create and evaluate new optimizations. You can find an actual list of existing k-CAS implementations in [2], see Table 1 in Section 8.
-
-[1] Harris, Timothy L., Keir Fraser, and Ian A. Pratt. "A practical multi-word compare-and-swap operation." International Symposium on Distributed Computing. Springer, Berlin, Heidelberg, 2002. https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.16.6655&rep=rep1&type=pdf
-
-[2] Guerraoui, R., Kogan, A., Marathe, V. J., & Zablotchi, I. (2020). Efficient multi-word compare and swap. arXiv preprint arXiv:2008.02527. https://arxiv.org/pdf/2008.02527
+Under this project, you will you integrate GenMC into Lincheck.
 
 
-## Recoverable Concurrent Algorithms for NVRAM
+# Concurrent Cache-Friendly Splay Tree
+Splay trees are known as contention-adjustable balanced trees, which work efficiently under non-uniform workloads. However, they are expensive in terms of cache locality (each element is associated with a node) and are not easily portable to the concurrent environment. There are several ideas on how to fill the gap. First, each node can contain multiple elements, while the number of children remains two. After that, we can increase the number of children up to `K+1`, where `K` is the number of elements stored in each node. Also, it is possible to apply the move-to-front heuristic under some probability and/or perform it in batches. In the end, we can design a concurrent solution with wait-free reads and lock/obstruction-free updates, performing balancing lazily; thus, solving potential races and reducing contention. This project requires strong algorithmic knowledge. 
 
-With the rise of non-volatile memory (NVRAM), the corresponding recoverable algorithms -- algorithms that leverage state saved in NVRAM for efficient recovery from crash failures -- became a hot topic in the concurrent programming field. See the corresponding SPTDC talk by Danny Hendler: https://2019.sptdc.ru/2019/talks/2flspfacqcvwd5zykt2ngs/
+# Priority Scheduler for Kotlin Coroutines 
+Recently, we proposed SMQ priority scheduler (the draft is available [here](https://arxiv.org/abs/2109.00657))-- the Stealing Multi-Queue algorithm which leverages the classic Multi-Queue design ([paper](https://dl.acm.org/doi/pdf/10.1145/2755573.2755616?casa_token=qJjo7gi9wDAAAAAA:GY-a0HzShpGKj0cz9l7yHQw5z56YMNXaxR4DBRenTFCRzGPS4Stxx8X9py-dB7_a5gvXZcBhxXoS)) to reduce the amount of wasted work in iterative algorithms ([paper](https://dl.acm.org/doi/pdf/10.1145/3323165.3323201?casa_token=tkv3jP8IUb4AAAAA:rvEiqmZLcneERZu4po_3ZUcyhrgfDv1761vNoI0zcM9PyWX-hiWf6H7yTFZMvTOkpdSgSif6yF-V)). (Essentially, priority schedulers are concurrent priority queues with relaxed semantics.) We successfully showed that the presented approach works great for parallel graph algorithms, outperforming the state-of-the-art solutions. Moreover, it is possible to use the same design in other applications, such as coroutines scheduling, when each coroutine can have a priority. However, it brings us to a set of problems.
 
-Recently, we supported several popular models for such algorithms in Lincheck -- the tool for testing concurrency on JVM (https://github.com/Kotlin/kotlinx-lincheck). With such a tool developing new algorithms, the ones for NVRAM, in particular, becomes simpler and more efficient. Thus, we suggest creating new algorithms!
+First, the classic SMQ approach does not utilize threads efficiently; all of them consume CPU until the total work is done, and we need to make it possible for threads to sleep and wake up only when required. What is more, this feature can improve even the existing graph processing algorithms when the best performance is obtained not at the maximal number of threads.
 
-All in all, you will read a lot of papers related to NVRAM, choose some topic(s) (there are a lot of data structures that are still not implemented, so we have different options), and create a new algorithm.
+The next step is to make the algorithm fully adaptive -- the current version has a couple of parameters to be tuned. This tuning should be performed automatically, depending on the current workload, and the overhead for this adaptivity should be minimum. In some sense, the number of active threads is also such an adaptive property.
 
-## Academic concurrent algorithms evaluation
+To evaluate, we will implement the algorithm in C++ and benchmark it against the state-of-the-art priority schedulers.
 
-Lincheck is a practical tool for testing concurrent algorithms in JVM-based languages, which supports both stress-testing and bounded model checking. Roughly, Lincheck generates a series of concurrent scenarios, executes them in either stress-testing or model-checking mode, and checks whether there exists some sequential execution that can explain the results satisfying the specified correctness property. In addition, it supports durable data structures designed for NVRAM (non-volatile memory), but in a very naive way, assuming that all writes are automatically persisted, and the operations can detect whether they are completed or not after a crash. See the project website for details: https://github.com/Kotlin/kotlinx-lincheck.
-
-Under this project, we suggest implementing a lot of algorithms presented at the recent top-tier academic conferences and checking whether they are correct with Lincheck. We expect to find several bugs either in the provided Java implementations or in the algorithms themselves. The model checking mode should help a lot with the investigations since it provides a trace of the incorrect execution.
-
-Working on this project, you will get a lot of knowledge and practice in concurrent algorithms.
+The last step is to integrate the algorithm into Kotlin Coroutines as a separate library and provide a set of examples on how Kotlin Coroutines can be used for iterative algorithms with this coroutines scheduler under the hood.
